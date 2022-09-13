@@ -1,12 +1,13 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"strings"
 	"syscall"
-	"time"
 
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/proxy"
@@ -14,26 +15,25 @@ import (
 
 const SO_ORIGINAL_DST = 80
 
+var (
+	serverAddress string
+	socks5Address string
+	socks5Auth    string
+)
+
+func init() {
+	flag.StringVar(&serverAddress, "l", ":2319", "the server listen address")
+	flag.StringVar(&socks5Address, "socks", "192.168.5.13:2080", "the forward socks5 proxy address ")
+	flag.StringVar(&socks5Auth, "auth", "", "the socks5 proxy auth example user:test ")
+}
+
 func main() {
 	// Create a listener
-	addr := ":2319"
-	list, err := net.Listen("tcp", addr)
+	flag.Parse()
+	list, err := net.Listen("tcp", serverAddress)
 	if err != nil {
-		log.Fatalf("couldn't listen to %q: %q\n", addr, err.Error())
+		log.Fatalf("couldn't listen to %q: %q\n", serverAddress, err.Error())
 	}
-	// // Wrap listener in a proxyproto listener
-	// proxyListener := &proxyproto.Listener{Listener: list}
-	// defer proxyListener.Close()
-
-	// // Wait for a connection and accept it
-	// for {
-	// 	conn, err := proxyListener.Accept()
-	// 	if err != nil {
-	// 		log.Printf("Accept failed: %v", err)
-
-	// 	}
-	// 	go process(conn)
-	// }
 
 	for {
 		conn, err := list.Accept()
@@ -67,30 +67,10 @@ func process(client net.Conn) {
 		client.Close()
 		return
 	}
-	log.Printf("local address: %q", client.LocalAddr().String())
-	log.Printf("remote address: %q", client.RemoteAddr().String())
-	tcpConn := client.(*net.TCPConn)
-	tcpConnFile, err := tcpConn.File()
+	// log.Printf("local address: %q", client.LocalAddr().String())
+	// log.Printf("remote address: %q", client.RemoteAddr().String())
+	newConn, dst, dport, err := getDestConn(client)
 	if err != nil {
-		log.Error(err)
-		tcpConn.Close()
-		return
-	} else {
-		tcpConn.Close()
-	}
-	addr, err := syscall.GetsockoptIPv6Mreq(int(tcpConnFile.Fd()), syscall.IPPROTO_IP, SO_ORIGINAL_DST)
-	if err != nil {
-		log.Error(err)
-		return
-	}
-	dst := itod(uint(addr.Multiaddr[4])) + "." +
-		itod(uint(addr.Multiaddr[5])) + "." +
-		itod(uint(addr.Multiaddr[6])) + "." +
-		itod(uint(addr.Multiaddr[7]))
-	dport := uint16(addr.Multiaddr[2])<<8 + uint16(addr.Multiaddr[3])
-	newConn, err := net.FileConn(tcpConnFile)
-	if err != nil {
-		log.Error(err)
 		return
 	}
 	if _, ok := newConn.(*net.TCPConn); ok {
@@ -100,8 +80,8 @@ func process(client net.Conn) {
 		return
 	}
 	// log.Printf("local address: %q", dst )
-	fmt.Println(time.Now())
-	log.Printf("address: %s:%s", dst, dport)
+	// fmt.Println(time.Now())
+	// log.Printf("address: %s:%s", dst, dport)
 
 	target, err := connectDst(dst, dport)
 	if err != nil {
@@ -115,9 +95,40 @@ func process(client net.Conn) {
 
 }
 
+func getDestConn(conn net.Conn) (client net.Conn, dst string, dport uint16, err error) {
+	tcpConn := conn.(*net.TCPConn)
+	tcpConnFile, err := tcpConn.File()
+	if err != nil {
+		log.Error(err)
+		tcpConn.Close()
+		return nil, "", 0, err
+	} else {
+		tcpConn.Close()
+	}
+	addr, err := syscall.GetsockoptIPv6Mreq(int(tcpConnFile.Fd()), syscall.IPPROTO_IP, SO_ORIGINAL_DST)
+	if err != nil {
+		log.Error(err)
+		return nil, "", 0, err
+	}
+	dst = itod(uint(addr.Multiaddr[4])) + "." +
+		itod(uint(addr.Multiaddr[5])) + "." +
+		itod(uint(addr.Multiaddr[6])) + "." +
+		itod(uint(addr.Multiaddr[7]))
+	dport = uint16(addr.Multiaddr[2])<<8 + uint16(addr.Multiaddr[3])
+	client, err = net.FileConn(tcpConnFile)
+	if err != nil {
+		log.Error(err)
+		return nil, "", 0, err
+	}
+	return client, dst, dport, nil
+}
+
 func connectDst(dst string, dport uint16) (net.Conn, error) {
 
-	dialer, err := proxy.SOCKS5("tcp", "192.168.5.13:2080", nil, proxy.Direct)
+	dialer, err := proxy.SOCKS5("tcp", socks5Address, &proxy.Auth{
+		User:     strings.Split(socks5Auth, ":")[0],
+		Password: strings.Split(socks5Auth, ":")[1],
+	}, proxy.Direct)
 	if err != nil {
 		return nil, err
 	}
