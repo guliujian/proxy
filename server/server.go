@@ -86,10 +86,9 @@ func process(client net.Conn) {
 	target, err := connectDst(dst, dport)
 	if err != nil {
 		log.Errorf("connect error ", err)
-		client.Write([]byte{})
-		client.Close()
 		return
 	}
+	defer client.Close()
 	defer target.Close()
 	proxyPack(client, target)
 
@@ -124,11 +123,16 @@ func getDestConn(conn net.Conn) (client net.Conn, dst string, dport uint16, err 
 }
 
 func connectDst(dst string, dport uint16) (net.Conn, error) {
-
-	dialer, err := proxy.SOCKS5("tcp", socks5Address, &proxy.Auth{
-		User:     strings.Split(socks5Auth, ":")[0],
-		Password: strings.Split(socks5Auth, ":")[1],
-	}, proxy.Direct)
+	var auth proxy.Auth
+	if socks5Auth != "" {
+		auth = proxy.Auth{
+			User:     strings.Split(socks5Auth, ":")[0],
+			Password: strings.Split(socks5Auth, ":")[1],
+		}
+	} else {
+		auth = proxy.Auth{}
+	}
+	dialer, err := proxy.SOCKS5("tcp", socks5Address, &auth, proxy.Direct)
 	if err != nil {
 		return nil, err
 	}
