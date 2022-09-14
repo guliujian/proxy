@@ -86,6 +86,10 @@ func process(client net.Conn) {
 	target, err := connectDst(dst, dport)
 	if err != nil {
 		log.Errorf("connect error ", err)
+		err := client.(*net.TCPConn).SetLinger(0)
+		if err != nil {
+			log.Errorf("error when setting linger: %s", err)
+		}
 		return
 	}
 	defer client.Close()
