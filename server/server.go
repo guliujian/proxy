@@ -9,6 +9,9 @@ import (
 	"strings"
 	"syscall"
 
+	"net/http"
+	_ "net/http/pprof"
+
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/proxy"
 )
@@ -19,6 +22,7 @@ var (
 	serverAddress string
 	socks5Address string
 	socks5Auth    string
+	dialer        proxy.Dialer
 )
 
 func init() {
@@ -34,7 +38,23 @@ func main() {
 	if err != nil {
 		log.Fatalf("couldn't listen to %q: %q\n", serverAddress, err.Error())
 	}
+	go func() {
+		log.Println(http.ListenAndServe(":6060", nil))
+	}()
 
+	var auth proxy.Auth
+	if socks5Auth != "" {
+		auth = proxy.Auth{
+			User:     strings.Split(socks5Auth, ":")[0],
+			Password: strings.Split(socks5Auth, ":")[1],
+		}
+	} else {
+		auth = proxy.Auth{}
+	}
+	dialer, err = proxy.SOCKS5("tcp", socks5Address, &auth, proxy.Direct)
+	if err != nil {
+		log.Fatalf("failed to dialer socks5 proxy :%q", err.Error())
+	}
 	for {
 		conn, err := list.Accept()
 		if err != nil {
@@ -67,12 +87,15 @@ func process(client net.Conn) {
 		client.Close()
 		return
 	}
+	fmt.Printf("%#v", client)
 	// log.Printf("local address: %q", client.LocalAddr().String())
 	// log.Printf("remote address: %q", client.RemoteAddr().String())
 	newConn, dst, dport, err := getDestConn(client)
 	if err != nil {
 		return
 	}
+	// syscall.SetNonblock(client.(*net.TCPConn).File())
+	// client.Close()
 	if _, ok := newConn.(*net.TCPConn); ok {
 		client = newConn.(*net.TCPConn)
 	} else {
@@ -82,14 +105,17 @@ func process(client net.Conn) {
 	// log.Printf("local address: %q", dst )
 	// fmt.Println(time.Now())
 	// log.Printf("address: %s:%s", dst, dport)
-
+	fmt.Printf("%#v", client)
 	target, err := connectDst(dst, dport)
 	if err != nil {
 		log.Errorf("connect error ", err)
+		// fmt.Fprintf(client, "")
 		err := client.(*net.TCPConn).SetLinger(0)
 		if err != nil {
 			log.Errorf("error when setting linger: %s", err)
 		}
+		client.(*net.TCPConn).CloseRead()
+		client.(*net.TCPConn).Close()
 		return
 	}
 	defer client.Close()
@@ -101,6 +127,7 @@ func process(client net.Conn) {
 func getDestConn(conn net.Conn) (client net.Conn, dst string, dport uint16, err error) {
 	tcpConn := conn.(*net.TCPConn)
 	tcpConnFile, err := tcpConn.File()
+	fd := tcpConnFile.Fd()
 	if err != nil {
 		log.Error(err)
 		tcpConn.Close()
@@ -123,23 +150,25 @@ func getDestConn(conn net.Conn) (client net.Conn, dst string, dport uint16, err 
 		log.Error(err)
 		return nil, "", 0, err
 	}
+	syscall.SetNonblock(int(fd), true)
+	tcpConnFile.Close()
 	return client, dst, dport, nil
 }
 
 func connectDst(dst string, dport uint16) (net.Conn, error) {
-	var auth proxy.Auth
-	if socks5Auth != "" {
-		auth = proxy.Auth{
-			User:     strings.Split(socks5Auth, ":")[0],
-			Password: strings.Split(socks5Auth, ":")[1],
-		}
-	} else {
-		auth = proxy.Auth{}
-	}
-	dialer, err := proxy.SOCKS5("tcp", socks5Address, &auth, proxy.Direct)
-	if err != nil {
-		return nil, err
-	}
+	// var auth proxy.Auth
+	// if socks5Auth != "" {
+	// 	auth = proxy.Auth{
+	// 		User:     strings.Split(socks5Auth, ":")[0],
+	// 		Password: strings.Split(socks5Auth, ":")[1],
+	// 	}
+	// } else {
+	// 	auth = proxy.Auth{}
+	// }
+	// dialer, err := proxy.SOCKS5("tcp", socks5Address, &auth, proxy.Direct)
+	// if err != nil {
+	// 	return nil, err
+	// }
 	// dialer := &net.Dialer{
 	// 	Control: func(_, _ string, c syscall.RawConn) error {
 	// 		return c.Control(func(fd uintptr) {
