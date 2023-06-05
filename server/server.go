@@ -87,9 +87,8 @@ func process(client net.Conn) {
 		client.Close()
 		return
 	}
-	fmt.Printf("%#v", client)
-	// log.Printf("local address: %q", client.LocalAddr().String())
-	// log.Printf("remote address: %q", client.RemoteAddr().String())
+	log.Printf("local address: %q", client.LocalAddr().String())
+	log.Printf("remote address: %q", client.RemoteAddr().String())
 	newConn, dst, dport, err := getDestConn(client)
 	if err != nil {
 		return
@@ -102,10 +101,7 @@ func process(client net.Conn) {
 		log.Errorf("ERR: newConn is not a *net.TCPConn, instead it is: %T (%v)", newConn, newConn)
 		return
 	}
-	// log.Printf("local address: %q", dst )
-	// fmt.Println(time.Now())
-	// log.Printf("address: %s:%s", dst, dport)
-	fmt.Printf("%#v", client)
+	log.Printf("dst address: %s:%d", dst, dport)
 	target, err := connectDst(dst, dport)
 	if err != nil {
 		log.Errorf("connect error ", err)
@@ -114,7 +110,6 @@ func process(client net.Conn) {
 		if err != nil {
 			log.Errorf("error when setting linger: %s", err)
 		}
-		client.(*net.TCPConn).CloseRead()
 		client.(*net.TCPConn).Close()
 		return
 	}
@@ -188,9 +183,9 @@ func connectDst(dst string, dport uint16) (net.Conn, error) {
 func proxyPack(client, target net.Conn) {
 	serverClosed := make(chan struct{}, 1)
 	clientClosed := make(chan struct{}, 1)
-	buf := make([]byte, 32*1024)
-	go broker(target, client, clientClosed, buf)
-	go broker(client, target, serverClosed, buf)
+	// buf := make([]byte, 32*1024)
+	go broker(target, client, clientClosed)
+	go broker(client, target, serverClosed)
 
 	var waitFor chan struct{}
 	select {
@@ -209,8 +204,9 @@ func proxyPack(client, target net.Conn) {
 
 }
 
-func broker(dst, src net.Conn, srcClosed chan struct{}, buf []byte) {
-	_, err := io.CopyBuffer(dst, src, buf)
+func broker(dst, src net.Conn, srcClosed chan struct{}) {
+	// buf := make([]byte, 32*1024)
+	_, err := io.Copy(dst, src)
 
 	if err != nil {
 		log.Printf("Copy error: %s", err)

@@ -1,0 +1,5 @@
+FROM alpine:3.11
+
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositories && apk add --update iptables ip6tables
+
+CMD ["sh"]
