@@ -1,0 +1,133 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: envoy
+spec:
+  podManagementPolicy: OrderedReady
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: envoy
+  serviceName: envoy
+  template:
+    metadata:
+      labels:
+        app: envoy
+    spec:
+      containers:
+      - image: proxy:test
+        imagePullPolicy: IfNotPresent
+        args:
+        - -l
+        - :2319
+        - -socks
+        - "x:x" #socks5 proxy server 
+        # - -auth  #socks5 proxy server auth
+        # - "user:pass"
+        name: proxy
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      - args:
+        - --config-path
+        - /etc/envoy/envoy.yaml
+        - --service-node
+        - $(POD_NAME).$(NAMESPACE)
+        - --service-cluster
+        - $(DEPLOYMENT_NAME).$(NAMESPACE)
+        command:
+        - envoy
+        env:
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: DEPLOYMENT_NAME
+          value: envoy
+        image: envoyproxy/envoy:v1.19.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 2
+          httpGet:
+            path: /ready
+            port: 8001
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 15
+          successThreshold: 1
+          timeoutSeconds: 5
+        name: envoy
+        ports:
+        - containerPort: 80
+          hostPort: 80
+          name: rsc-fe
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 2
+          httpGet:
+            path: /ready
+            port: 8001
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          successThreshold: 3
+          timeoutSeconds: 5
+        resources:
+          limits:
+            cpu: "4"
+            memory: 4Gi
+          requests:
+            cpu: "4"
+            memory: 4Gi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /etc/envoy/
+          name: envoyconfig
+        - mountPath: /etc/secret/
+          name: sds-cert
+          readOnly: true
+      dnsPolicy: ClusterFirst
+      initContainers:
+      - command:
+        - /bin/sh
+        - -ec
+        - |
+          iptables -t nat -I OUTPUT  -d 192.168.0.75/32 -p tcp -m tcp   --dports xxxx -j REDIRECT --to-ports 2319
+        # 上面地址和端口可以简化为 iptables -t nat -I OUTPUT  ! -d 内网ip段 -p tcp -j REDIRECT --to-ports 2319 可以重复多条规则，确保内网的流量不转发到代理
+        image: reg.real-ai.cn/rsc/proxy-init:latest
+        imagePullPolicy: IfNotPresent
+        name: iptables
+        resources: {}
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+          runAsUser: 0
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: envoyconfig
+        name: envoyconfig
+      - name: sds-cert
+        secret:
+          defaultMode: 420
+          secretName: envoy
+  updateStrategy:
+    rollingUpdate:
+      partition: 0
+    type: RollingUpdate
+ 
